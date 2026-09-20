@@ -1,0 +1,20 @@
+{
+  "name": "kazhutakali",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Web-based multiplayer Kazhutakali (Kazhuta) — Phase 1: pure game engine",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "demo": "tsx demo.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
