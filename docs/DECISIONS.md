@@ -5,6 +5,29 @@ session (human or agent) should be able to reconstruct the *why* from this file
 without reverse-engineering the code. Superseded decisions are struck through, not
 deleted.
 
+## Phase 2 — Socket.IO room/session server
+
+| # | Decision | Rationale / alternatives |
+|---|----------|--------------------------|
+| D26 | **Offline seats KEEP receiving the turn and are auto-played after a grace timer** (default 90s) rather than being skipped or removed from rounds | AGENTS.md S1 mandates grace + auto-play. Skipping offline holders would freeze rounds: engine `roundComplete` counts all holders (correct per E2), so a skipped-but-counting player is a deadlock. Auto-play is also the honest simulation of "the player would eventually act". `ensureTurnTimers` is a systemic safety net called on every store emit, covering the case where the turn *arrives* while the player is already offline. |
+| D27 | **Two-layer identity: secret `sessionToken` (control key, server-issued, 24 CSPRNG bytes) vs public `playerId` (opaque label, safe to broadcast)** | AGENTS.md S2. Client JSON can never grant control — guessing a token is infeasible, and a token only works in the room that issued it. Public ids let any player challenge any other without leaking control. Names are display-only (duplicates allowed). |
+| D28 | **Room codes: 5 chars from an unambiguous alphabet** (`ABCDEFGHJKMNPQRSTUVWXYZ23456789` — no 0/O, 1/I/L) | Human-shareable by design; dictation-safe. Collision-retry on allocation; 30-bit space is ample for in-memory rooms. |
+| D29 | **All wall-clock behavior injected via `StoreClock`** (`now()`/`setTimeout`/`clearTimeout`); production passes real timers, tests pass a virtual clock | Deterministic S1/S3/S6 tests with zero sleeps in store tests (`fc.advance(30_000)` fires grace timers synchronously). Mirrors Phase 1's injectable RNG philosophy. |
+| D30 | **Auto-play card choice: lowest-rank legal card, preferring to follow the active suit** | Minimizes harm to the absent player: following suit avoids the false-strike record (D11) and losing strikes; lowest rank avoids winning collections they'd then have to burn. Chosen over "random legal card" (unfair) and "highest card" (griefing the absent player). |
+| D31 | **Challenge cooldown: 10s between challenges from one seat** (store-enforced, `CHALLENGE_COOLDOWN`) | Failed challenges are free (RULES.md), so without a cooldown the E7 accusation event doubles as a polling oracle for challenge-spam. Cooldown makes oracle use expensive without touching game rules. |
+| D32 | **Seat connectivity is NEVER written into `state.players[].connected`** — views are patched per socket from live Seat state instead | Critical: engine `advanceTurn` reads `p.connected` and would skip offline holders, but `roundComplete` counts all holders — skipping mid-round freezes the game (see D26). Round completion stays connection-blind on purpose; presence is a *presentation* concern. Reconnecting never invalidates plays made meanwhile. |
+| D33 | **`applyPlay` auto-resolves completing rounds (D22), so the store captures a `lastResolution` snapshot per room** and the socket layer emits one `game:round-resolved` per actual resolution | By fanout time `state.round` is already the NEXT round; without the snapshot the resolution event would be unobservable. Consumed-once semantics prevent duplicate events. |
+| D34 | **Event names: `game:challenge` (client→server) + `challenge:result` unicast (server→challenger)** — supersedes Phase 1's anticipated `game:challenge-strike` | The result detail (succeeded/failed) must NOT be broadcast: a broadcast would leak exactly who holds off-suit cards to everyone watching. Only the challenger learns their own result; everyone else infers only what the subsequent state/log shows (D10/D12). |
+| D35 | **Per-room mutation serialization via promise chains** (`runExclusive`), not a global lock | S10 requires total order per room; Socket.IO interleaves events across sockets. A promise chain per room keeps rooms independent (S1) and avoids head-of-line blocking across rooms. Only `game:play-card` / `game:again` / `game:challenge` queue — lobby ops are already naturally ordered. |
+| D36 | **S6 is two-layer: per-socket connect-op spacing (1s, socket layer) + per-seat action interval (250ms, store)** | Connect-op spacing stops room-code brute force; action spacing stops turn-tick spam. Both floor-bounded, both sender-visible via `RATE_LIMITED`. |
+| D37 | **`room:leave` semantics: lobby leave removes the seat permanently; mid-game leave is treated as a disconnect** (hand retained, grace auto-play finishes the game) | Losing a seated player's dealt hand on accidental leave would corrupt the game; the seat can resume via token. The leaving socket stays in the Socket.IO room so late broadcasts (`room:closed`) still reach it. |
+| D38 | **Spectator fallback happens in the socket layer** — the store's `joinRoom` throws `ROOM_FULL`, and the handler converts it into a spectator join | Keeps the store a pure model (no implicit mode switches) while S7 gives clients a graceful fallback instead of a dead end. Spectators get `PublicView` only (S5). |
+| D39 | **Sockets are keyed by `socket.data` session objects; every inbound event re-derives authority from the bound context** — no trust in payload-declared identity | Only `room:create` / `room:join` (which carry the secret token when resuming) may mint a context; all other events act through it. `hello` + `error` are the only events sent before a context exists. |
+
+### Phase 2 engine-view note
+
+`patchViewPresence` overrides `players[].connected` in every shipped view from live Seat state (D32) — the ONLY place seat connectivity reaches client output.
+
 ## Phase 1 — Core engine
 
 | # | Decision | Rationale / alternatives |
@@ -39,15 +62,22 @@ deleted.
 
 - **Server restart loses all game state.** Phase 2 keeps rooms in memory only
   (AGENTS.md S12 explicitly defers persistence to Phase 4, if ever). Restarting the
-  process mid-game abandons the match; no auto-save exists by design.
-- **Failed challenges are free.** RULES.md specifies no penalty for an unsuccessful
-  challenge, so none is applied. If this enables challenge-spam griefing in practice,
-  revisit with the user before adding a cooldown.
+  process mid-game abandons the match; no auto-save exists by design. Clients can
+  detect this (`room:join` with a token → fresh seat) but cannot recover the match.
+- **Failed challenges are free, but rate-limited.** RULES.md specifies no penalty
+  for an unsuccessful challenge; D31 adds a 10s per-seat cooldown so accusations
+  can't be used as a cheap false-strike oracle. Tune `challengeCooldownMs` if
+  playtesting shows it's too tight or loose.
 
 ## Open questions / deferred to later phases
 
-- Phase 2 socket contract for E7 mode (b): `game:challenge-strike` event shape —
-  must decide per-player challenge rate limits (S6) and whether spectators can see
-  `falseStrikes` after game over (pending user input at Phase 2 start).
+- ~~Phase 2 socket contract for E7 mode (b)~~ — resolved as `game:challenge` +
+  unicast `challenge:result` (D34), with a per-seat cooldown (D31).
+- Whether `falseStrikes` should be REVEALED to everyone after game over (a
+  post-game "here's who bluffed" screen). Current default: views never contain
+  them, even after game over (D11/D34). The engine retains the data server-side,
+  so Phase 3 can add an opt-in reveal event without schema changes — needs user
+  preference.
+- Phase 3: UI framework and whether the client bundles (Vite) or stays separate.
 - Phase 4: whether persistence (Postgres + Prisma) is wanted at all — must ask user
   per AGENTS.md general rule 3.
