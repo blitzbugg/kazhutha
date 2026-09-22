@@ -2,7 +2,7 @@
   "name": "kazhutakali",
   "version": "0.1.0",
   "private": true,
-  "description": "Web-based multiplayer Kazhutakali (Kazhuta) — Phase 1: pure game engine",
+  "description": "Web-based multiplayer Kazhutakali (Kazhuta) — Phase 2: Socket.IO room/session server",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -10,11 +10,19 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "demo": "tsx demo.ts"
+    "demo": "tsx demo.ts",
+    "start": "tsx server/main.ts"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^22.10.2",
+    "socket.io-client": "^4.8.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3",
+    "zod": "^4.6.5"
   }
 }
