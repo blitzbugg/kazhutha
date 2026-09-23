@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["engine.ts", "demo.ts", "tests/**/*.ts"]
+  "include": ["engine.ts", "demo.ts", "server/**/*.ts", "shared/**/*.ts", "tests/**/*.ts"]
 }

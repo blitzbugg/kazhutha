@@ -1,16 +1,26 @@
 /**
- * Production entrypoint — `npm start`. Phase 3's UI will be served separately;
- * for now the socket server runs standalone and answers /healthz.
+ * Production entrypoint — `npm start`.
+ *
+ * Serves the Socket.IO game server plus, when a `dist/` build exists (D46),
+ * the Phase 3 SPA from the same origin. /healthz answers JSON either way.
  */
-import { GameServer } from './index.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { GameServer, type SocketServerOptions } from './index.js';
+
+const distDir = fileURLToPath(new URL('../dist', import.meta.url));
+const opts: SocketServerOptions = fs.existsSync(path.join(distDir, 'index.html'))
+  ? { staticDir: distDir }
+  : {};
 
 const port = Number(process.env.PORT ?? 3000);
-const server = new GameServer();
+const server = new GameServer(opts);
 
 server
   .listen(port)
   .then((p) => {
-    console.log(`[kazhuta] socket server listening on http://localhost:${p}`);
+    console.log(`[kazhuta] listening on http://localhost:${p}${opts.staticDir !== undefined ? ' (serving SPA from dist/)' : ' (API only — no dist/ build)'}`);
   })
   .catch((err) => {
     console.error('[kazhuta] failed to start:', err);

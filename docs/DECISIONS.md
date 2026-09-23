@@ -78,6 +78,25 @@ deleted.
   them, even after game over (D11/D34). The engine retains the data server-side,
   so Phase 3 can add an opt-in reveal event without schema changes — needs user
   preference.
-- Phase 3: UI framework and whether the client bundles (Vite) or stays separate.
+- ~~Phase 3: UI framework and whether the client bundles (Vite) or stays separate.~~
+  — resolved as React 19 + Vite SPA served by the game server (D41).
 - Phase 4: whether persistence (Postgres + Prisma) is wanted at all — must ask user
   per AGENTS.md general rule 3.
+
+## Phase 3 — Browser client (D40–D47)
+
+| # | Decision | Rationale / alternatives |
+|---|----------|--------------------------|
+| D40 | **`shared/protocol.ts`** — dependency-free module with all socket event names, payload types and the `ErrorCode` union; imported by both server and client. | Server `types.ts` previously duplicated this and had `'GAME_OVER'` listed twice. The client needs the contract without importing zod/socket.io server code. Alternative (codegen from zod) rejected as overkill for ~15 events. |
+| D41 | **Client stack: React 19 + Vite + socket.io-client; production build served as static files by the same Express server** (`server/index.ts` serves `dist/`, SPA fallback). | Single origin in production → no CORS, session tokens stay same-origin, one process to run. Vite dev server proxies `/socket.io` for HMR during development. Frameworks considered: vanilla TS (more boilerplate for reactive views), Svelte/Solid (smaller but new deps). |
+| D42 | **`client/rules.ts` mirrors `validatePlay`** (turn check → round-1 A♠ opener → active-suit follow with off-suit fallback) to drive playability badges (U1/U2); the server remains the sole authority. `tests/clientRules.test.ts` pins the mirror against engine behavior so it can't drift silently. | A client that can't predict legality gives terrible UX (click → server error). The mirror is advisory only: the server still rejects anything illegal, so drift can't corrupt state, only UX. |
+| D43 | **Session resume UX (S2/U5): same-transport reconnects auto-resume silently; a fresh page load shows an explicit "Rejoin room" button** instead of silently re-seating. Tokens persist in `localStorage` per room. | Auto-joining on page load would make it impossible to deliberately leave a room or switch accounts; the button makes resumption a visible choice. Verified live: reload mid-game → button → seat/hand intact. |
+| D44 | **`EventLog` humanizes raw player ids → display names.** Engine log lines contain ids by design (server doesn't know viewer context); the client owns presentation. | Raw ids leaked into the UI in the first live run ("0o0p233p0v2l plays A♠") — fixed by resolving ids against `view.players` at render time. |
+| D45 | **ChallengeBar v1 (superseded): round-scoped, shown only while a strike sat on the table.** | Seemed right but was stricter than the game: see D46. Kept here because the *reason* it failed is the interesting part. |
+| D46 | **ChallengeBar v2: strikers derived from the whole-game public log** (`"<id> plays <card> (strike)."` lines), bar available all game. Two engine facts forced this: (a) challenges are valid at any time — `resolveChallenge` consults the whole-game `falseStrikes` record which never expires; (b) a strike that auto-resolves in the same engine call (last follower forfeits) is never visible "on the table", so the log is the only durable public record. | Live discovery: challenge against a logged striker failed with "no evidence" — which exposed the deeper rule that the evidence record only contains TRUE false strikes (off-suit played while still holding the active suit), not forced strikes (off-suit with none held). The UI cannot and must not distinguish them: that's the hidden information mode (b) is built on. |
+| D47 | **Grace auto-play verified live, not just in tests:** a rematch seat left AWAY through the whole 90s window was auto-played by the server (its A♠ opener), unblocking the round. Presence badges (AWAY) come from live seat state patched into views (D32), never written into engine state. | Confirms the Phase 2 S1 design end-to-end under real reconnect timing. |
+
+## Open questions / deferred to later phases (Phase 3 additions)
+
+- Whether `falseStrikes` should be revealed on a post-game screen — still open,
+  unchanged by Phase 3 (views contain them never; D11/D34).

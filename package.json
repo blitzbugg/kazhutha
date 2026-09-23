@@ -8,20 +8,31 @@
     "node": ">=20"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p client",
     "test": "tsx --test tests/*.test.ts",
     "demo": "tsx demo.ts",
-    "start": "tsx server/main.ts"
+    "start": "tsx server/main.ts",
+    "build": "vite build",
+    "dev": "concurrently -k -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "tsx server/main.ts",
+    "dev:client": "vite"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^22.10.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
     "socket.io-client": "^4.8.3",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vite": "^8.3.0"
   },
   "dependencies": {
     "express": "^5.2.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "socket.io": "^4.8.3",
     "zod": "^4.6.5"
   }

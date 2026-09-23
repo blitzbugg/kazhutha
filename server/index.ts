@@ -17,6 +17,7 @@
  * validates, rate-limits, serializes, and fans out.
  */
 import http from 'node:http';
+import path from 'node:path';
 import { Server as SocketIOServer, type Socket } from 'socket.io';
 import express from 'express';
 
@@ -48,35 +49,11 @@ import {
   type RoundResolvedPayload,
 } from './types.js';
 
-/** Events clients may send — the Phase 3 client implements exactly these. */
-export const ClientEvents = [
-  'room:create',
-  'room:join',
-  'room:leave',
-  'room:list-players',
-  'game:start',
-  'game:again',
-  'game:play-card',
-  'game:challenge',
-] as const;
-export type ClientEvent = (typeof ClientEvents)[number];
-
-/** Events the server emits. */
-export const ServerEvents = [
-  'hello',
-  'error', // S5: unicast to the offender only, never broadcast
-  'room:joined',
-  'your:seat', // personal snapshot (join + S2 resume)
-  'room:players',
-  'state', // per-socket redacted view, sent on every room mutation
-  'game:round-resolved',
-  'game:over',
-  'challenge:result', // E7: unicast to the challenger (succeeded or not)
-  'player:connected',
-  'player:disconnected',
-  'room:closed',
-] as const;
-export type ServerEvent = (typeof ServerEvents)[number];
+// Event names are the shared wire contract (D40); re-exported so Phase 2
+// imports from server/index.js keep working.
+import { ClientEvents, ServerEvents, type ClientEvent, type ServerEvent } from '../shared/protocol.js';
+export { ClientEvents, ServerEvents };
+export type { ClientEvent, ServerEvent };
 
 export interface SocketServerOptions {
   turnGraceMs?: number;
@@ -86,9 +63,15 @@ export interface SocketServerOptions {
   /** S6: minimum ms between room:create/join from one socket. */
   connectRateLimitMs?: number;
   clock?: StoreClock;
+  /**
+   * Phase 3 (D46): directory containing the built SPA (client build output).
+   * When set, Express serves its static assets plus an index.html fallback.
+   * Null/undefined ⇒ API-only server (tests, dev with the Vite dev server).
+   */
+  staticDir?: string | null;
 }
 
-const DEFAULTS: Required<Omit<SocketServerOptions, 'clock'>> = {
+const DEFAULTS: Required<Omit<SocketServerOptions, 'clock' | 'staticDir'>> = {
   turnGraceMs: 90_000,
   emptyRoomTtlMs: 120_000,
   challengeCooldownMs: 10_000,
@@ -107,7 +90,7 @@ export class GameServer {
   readonly store: RoomStore;
   private readonly http: http.Server;
   private readonly clock: StoreClock;
-  private readonly opts: Required<Omit<SocketServerOptions, 'clock'>>;
+  private readonly opts: Required<Omit<SocketServerOptions, 'clock' | 'staticDir'>>;
   private readonly sessions = new Map<string, SocketSession>(); // socketId → session
   private readonly roomChains = new Map<string, Promise<void>>(); // S10
   /** Rooms whose game:over already fired (reset on rematch). */
@@ -124,6 +107,21 @@ export class GameServer {
     app.get('/healthz', (_req, res) => {
       res.json({ ok: true, rooms: this.store.roomCount() });
     });
+
+    // Phase 3 (D46): serve the built SPA from the same origin when a build
+    // output directory was provided. Socket.IO owns /socket.io at the http
+    // layer, so the fallback below never shadows it.
+    const staticDir = opts.staticDir ?? null;
+    if (staticDir !== null) {
+      app.use(express.static(staticDir));
+      app.use((req, res, next) => {
+        if (req.method !== 'GET' || req.path.startsWith('/socket.io') || req.path === '/healthz') {
+          next();
+          return;
+        }
+        res.sendFile(path.join(staticDir, 'index.html'));
+      });
+    }
 
     this.http = http.createServer(app);
     this.io = new SocketIOServer(this.http, { cors: { origin: true } });
