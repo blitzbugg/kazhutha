@@ -1,9 +1,10 @@
 /**
- * Phase 2 socket contracts — inbound payload schemas (S9) and shared types.
+ * Phase 2 socket contracts — inbound payload schemas (S9).
  *
  * Every inbound event is validated with zod BEFORE any game state is touched:
  * client JSON shape is never trusted (AGENTS.md S9). Outbound payload shapes
- * are documented here so the Phase 3 client and the server stay in sync.
+ * live in ../shared/protocol.ts (D40) — the single source of truth shared with
+ * the Phase 3 browser client.
  *
  * Identity model (DECISIONS.md D27):
  *  - `sessionToken` — SECRET, server-generated, stored client-side; grants
@@ -12,6 +13,21 @@
  *    reconnects); safe to include in views and challenge payloads.
  */
 import { z } from 'zod';
+
+// Outbound payload/error types re-exported from the shared protocol module so
+// existing server imports (roomStore, index) keep working unchanged (D40).
+export type {
+  ErrorCode,
+  ErrorPayload,
+  HelloPayload,
+  RoomJoinedPayload,
+  PlayerListEntry,
+  PlayerListPayload,
+  RoundResolvedPayload,
+  GameOverPayload,
+  PlayerConnectionPayload,
+  RoomClosedPayload,
+} from '../shared/protocol.js';
 
 // ---------------------------------------------------------------------------
 // Field schemas
@@ -61,103 +77,6 @@ export const GamePlayCardSchema = z.object({ roomCode: RoomCodeSchema, cardId: C
 export const GameChallengeSchema = z.object({ roomCode: RoomCodeSchema, accusedId: PlayerIdSchema });
 
 // ---------------------------------------------------------------------------
-// Error codes (server → client `error` event, S5: never broadcast)
+// Outbound payload shapes + error codes live in ../shared/protocol.ts (D40)
+// and are re-exported at the top of this file for server-internal use.
 // ---------------------------------------------------------------------------
-
-export type ErrorCode =
-  // transport-layer rejections (socket/index.ts)
-  | 'BAD_PAYLOAD'
-  | 'RATE_LIMITED'
-  | 'INTERNAL'
-  // room-store rejections (server/roomStore.ts)
-  | 'ROOM_NOT_FOUND'
-  | 'ROOM_FULL'
-  | 'ALREADY_IN_ROOM'
-  | 'NOT_IN_ROOM'
-  | 'NOT_HOST'
-  | 'GAME_IN_PROGRESS'
-  | 'NO_ACTIVE_GAME'
-  | 'GAME_OVER'
-  | 'NOT_SEATED'
-  | 'NOT_ENOUGH_PLAYERS'
-  | 'CHALLENGE_COOLDOWN'
-  // engine rejections relayed verbatim (E8) — mirrors engine PlayErrorCode
-  | 'GAME_OVER'
-  | 'NOT_YOUR_TURN'
-  | 'CARD_NOT_IN_HAND'
-  | 'MUST_LEAD_ACE_OF_SPADES'
-  | 'INVALID_PAYLOAD';
-
-export interface ErrorPayload {
-  event: string;
-  code: ErrorCode;
-  message: string;
-  issues?: Array<{ path: string; message: string }>;
-}
-
-// ---------------------------------------------------------------------------
-// Outbound event payloads (server → client)
-// ---------------------------------------------------------------------------
-
-/** Sent once on connection so clients can mirror server timing policy. */
-export interface HelloPayload {
-  turnGraceMs: number;
-  emptyRoomTtlMs: number;
-  challengeCooldownMs: number;
-  minActionIntervalMs: number;
-}
-
-/** Unicast on successful room:create / room:join / session resume. */
-export interface RoomJoinedPayload {
-  roomCode: string;
-  /** SECRET — persist client-side for reconnects (S2). */
-  sessionToken: string;
-  /** PUBLIC id of your seat (null for spectators). */
-  playerId: string | null;
-  isSpectator: boolean;
-  isHost: boolean;
-  view: unknown; // PublicView (lobby / spectator) or PlayerView (seated)
-}
-
-export interface PlayerListEntry {
-  playerId: string;
-  name: string;
-  seat: number;
-  connected: boolean;
-  isHost: boolean;
-  cardCount: number;
-}
-
-export interface PlayerListPayload {
-  roomCode: string;
-  phase: 'not-started' | 'in-round' | 'game-over';
-  players: PlayerListEntry[];
-  spectatorCount: number;
-}
-
-export interface RoundResolvedPayload {
-  roomCode: string;
-  /** Round number that just finished. */
-  resolvedRoundNumber: number;
-  hadStrike: boolean;
-  /** Cards that were on the table when the round resolved. */
-  cardsInPile: number;
-  nextLeaderId: string | null;
-}
-
-export interface GameOverPayload {
-  roomCode: string;
-  /** null ⇒ every hand emptied simultaneously; no Kazhuta (D19). */
-  loserId: string | null;
-}
-
-export interface PlayerConnectionPayload {
-  roomCode: string;
-  playerId: string;
-  name: string;
-}
-
-export interface RoomClosedPayload {
-  roomCode: string;
-  reason: 'empty';
-}
